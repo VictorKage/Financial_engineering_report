@@ -19,33 +19,17 @@ class PC_Calibration:
         for i, maturity in enumerate(maturities):
             r = r_values[i]
 
-            maturity_data = self.cleaned_data[
-                self.cleaned_data["exdate"] == maturity
-            ]
+            maturity_data = self.cleaned_data[self.cleaned_data["exdate"] == maturity]
 
             for strike in maturity_data["strike"].unique():
-                strike_data = maturity_data[
-                    maturity_data["strike"] == strike
-                ]
-
-                observed_put_prices = strike_data[
-                    strike_data["cp_flag"] == "P"
-                ]["mid"].values
-
-                observed_call_prices = strike_data[
-                    strike_data["cp_flag"] == "C"
-                ]["mid"].values
+                strike_data = maturity_data[maturity_data["strike"] == strike]
+                observed_put_prices = strike_data[strike_data["cp_flag"] == "P"]["mid"].values
+                observed_call_prices = strike_data[strike_data["cp_flag"] == "C"]["mid"].values
 
                 if len(observed_put_prices) > 0 and len(observed_call_prices) > 0:
                     T = strike_data["time_to_maturity"].values[0]
-
-                    theoretical_put_prices = self.PC_Prices(
-                        observed_call_prices, T, strike, r, q
-                    )
-
-                    loss += np.sum(
-                        (observed_put_prices - theoretical_put_prices) ** 2
-                    )
+                    theoretical_put_prices = self.PC_Prices(observed_call_prices, T, strike, r, q)
+                    loss += np.sum((observed_put_prices - theoretical_put_prices) ** 2)
 
         return loss
 
@@ -78,9 +62,15 @@ class PC_Calibration:
 
             maturities = self.cleaned_data["exdate"].unique()
 
-            calibrated_rates = dict(zip(maturities, calibrated_r))
+            results = pd.DataFrame({
+                "maturity": maturities,
+                "calibrated_r": calibrated_r,
+                "calibrated_q": calibrated_q
+            })
 
-            return calibrated_q, calibrated_rates
+            # save to csv
+            results.to_csv("calibrated_parameters.csv", index=False)
+            return results
 
         else:
             raise ValueError("Calibration failed: " + result.message)
@@ -88,6 +78,6 @@ class PC_Calibration:
 
 if __name__ == "__main__":
     pc_calibration = PC_Calibration()
-    calibrated_q, calibrated_r = pc_calibration.calibrate()
-    print(f"Calibrated q: {calibrated_q}, Calibrated r: {calibrated_r}")
+    results = pc_calibration.calibrate()
+    print(results)
 

@@ -32,12 +32,9 @@ class DataCleaner:
 
     def remove_itm_prices(self):
         # removing in-the-money Call options
-        print(self.df.shape[0])
         self.df = self.df[~((self.df["cp_flag"] == "C") & (self.df["strike"] < self.spy_close))]
-        print(self.df.shape[0])
         # removing in-the-money Put options
         self.df = self.df[~((self.df["cp_flag"] == "P") & (self.df["strike"] > self.spy_close))]
-        print(self.df.shape[0])
         
     def remove_arbitrage_prices(self):
         pass
@@ -72,10 +69,6 @@ class DataCleaner:
 
 if __name__ == "__main__":
     cleaner = DataCleaner()
-    #cleaned_data, spy_close = cleaner.clean_data_for_put_call_parity()
-    #print(cleaned_data)
-    #print(spy_close)
-
     test, spy_close_test = cleaner.clean_data_for_calibration()
     print(test)
     print(spy_close_test)

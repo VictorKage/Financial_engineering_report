@@ -1,12 +1,30 @@
 import numpy as np
 import pandas as pd
+import datetime as dt
 
 class DataCleaner:
     def __init__(self):
         sheet = pd.read_excel("Data20191113.xlsx", header=None)
+
         self.spy_close = sheet.iat[2, 6]
         self.df = sheet.iloc[6:].copy()
         self.df.columns = sheet.iloc[5].tolist()
+
+        # Clean column names
+        self.df.columns = (
+            self.df.columns
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+        # Convert dates
+        self.df["date"] = pd.to_datetime(self.df["date"], errors="coerce")
+        self.df["exdate"] = pd.to_datetime(self.df["exdate"], errors="coerce")
+
+        self.df["time_to_maturity"] = (
+            self.df["exdate"] - self.df["date"]
+        ).dt.days / 365 # er i tvivl her
 
 
     def remove_0_bid_prices(self):
@@ -14,10 +32,10 @@ class DataCleaner:
 
     def remove_itm_prices(self):
         # removing in-the-money Call options
-        self.df = self.df[~((self.df["cp_flag"] == "C") & (self.df["Strike"] < self.spy_close))]
+        self.df = self.df[~((self.df["cp_flag"] == "C") & (self.df["strike"] < self.spy_close))]
 
         # removing in-the-money Put options
-        self.df = self.df[~((self.df["cp_flag"] == "P") & (self.df["Strike"] > self.spy_close))]
+        self.df = self.df[~((self.df["cp_flag"] == "P") & (self.df["strike"] > self.spy_close))]
 
     def remove_arbitrage_prices(self):
         pass
@@ -27,24 +45,33 @@ class DataCleaner:
         self.df = self.remove_itm_prices()
         self.df = self.remove_arbitrage_prices()
         
-        return self.df
+        return self.df, self.spy_close
 
-    def clean_data_for_put_call_parity(self, n: int = 5) -> pd.DataFrame:
-        # n is the n-th nearest strike prices nearest to the spot price
-        # For all Maturity dates, we will select the n nearest strike prices to the spot price
-        self.grouped_df = self.df.groupby("exdate")
-        PC_df = self.grouped_df.apply(lambda x: x.sort_values(by="Strike", key=lambda y: abs(y - self.spy_close)))
-        # selecting the n nearest strike prices
-        PC_df = PC_df.groupby("exdate").head(n)
-        # ungrouping the dataframe
-        PC_df = PC_df.reset_index(drop=True)
-        return PC_df
+    def clean_data_for_put_call_parity(self, n: int = 5) -> tuple[pd.DataFrame, float]:
+        df_sorted = self.df.assign(
+            strike_diff=abs(self.df["strike"] - self.spy_close)
+        ).sort_values(by=["exdate", "strike_diff"])
+
+        # Select n unique nearest strikes per exdate
+        nearest_strikes = (
+            df_sorted.groupby("exdate")["strike"]
+            .unique()
+            .apply(lambda strikes: strikes[:n*2])
+            .explode()
+            .reset_index()
+        )
+
+        # Merge back to get both Call and Put records for those strikes
+        pc_df = pd.merge(self.df, nearest_strikes, on=["exdate", "strike"])
+
+        return pc_df, self.spy_close
 
 
 
 if __name__ == "__main__":
     cleaner = DataCleaner()
-    cleaned_data = cleaner.clean_data_for_put_call_parity()
+    cleaned_data, spy_close = cleaner.clean_data_for_put_call_parity()
     print(cleaned_data)
+    print(spy_close)
 
 

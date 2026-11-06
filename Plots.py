@@ -61,15 +61,28 @@ class Imp_Vol_Plots:
                 moneyness.append(K / S)
                 dtes.append(T)
 
-        # 3D plot of implied volatility
+        # Triangulated surface for the irregularly spaced strike/maturity data.
         fig = plt.figure(figsize=(10, 7))
         ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(moneyness, dtes, ivs, c=ivs, cmap='viridis', marker='o')
+        ax.plot_trisurf(moneyness, dtes, ivs, cmap='viridis', linewidth=0.2)
         ax.set_xlabel('Moneyness (K/S)')
         ax.set_ylabel('Time to Maturity (T)')
         ax.set_zlabel('Implied Volatility (IV)')
         ax.set_title('Implied Volatility Surface')
         plt.show()
+
+        # Plotting the implied volatility against moneyness for each unique time to maturity
+        unique_dtes = sorted(set(dtes))
+        plt.figure(figsize=(10, 7))
+        for dte in unique_dtes:
+            ivs_for_dte = [iv for iv, t in zip(ivs, dtes) if t == dte]
+            moneyness_for_dte = [m for m, t in zip(moneyness, dtes) if t == dte]
+            plt.plot(moneyness_for_dte, ivs_for_dte, label=f'Time to Maturity: {dte:.2f} years')
+            plt.xlabel('Moneyness (K/S)')
+            plt.ylabel('Implied Volatility (IV)')
+            plt.title('Implied Volatility vs. Moneyness')
+            plt.legend()
+            plt.show()
 
 if __name__ == "__main__":
     data_cleaner = DataCleaner()

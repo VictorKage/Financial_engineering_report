@@ -64,8 +64,8 @@ class PC_Calibration:
 
             results = pd.DataFrame({
                 "maturity": maturities,
-                "calibrated_r": calibrated_r,
-                "calibrated_q": calibrated_q
+                "calibrated_r": calibrated_r.round(5),
+                "calibrated_q": calibrated_q.round(5)
             })
 
             # save to csv

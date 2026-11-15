@@ -61,3 +61,47 @@ Mine tanker om papir. Det er lidt sådan bare det vi skal bruge af teknikker til
 call priser ud på. mat delen var ikke super overvælende. de brugte meget tid om valg af alpha 
 og hvorfor det var vigtigt. værd at tage i mente når vi skal skrive vores papir. 
 Closed form solutions til at når vi kender vores char funtion. brude være nemt at kode op.
+
+i forhold til VG gør papir det også. nok den eneste connection til VG overhovedet. ellers er det bare char functionen de omskriver på en smart måde.  
+
+
+Noter til Madan, D. and Seneta, E. (1990)
+### Abstract Noter
+ The broad objective is to provide a practical and empirically relevant alternative to the role of Brownian motion. basicly bs model dårligt empreisk. det vil vi fiks
+
+
+ venter med at læse
+
+
+Noter til Schmelzle, M. (2010). 
+### Abstract Noter
+Fourier transform techniques are playing an increasingly important role in
+Mathematical Finance. For arbitrary stochastic price processes for which the
+characteristic functions are tractable either analytically or numerically, prices for a
+wide range of derivatives contracts are readily available by means of Fourier inversion
+methods
+
+### Introduction
+As an alternative to model the option payoff directly by an analytical stochastic
+process, it has been recognized that by mapping the characteristic function of the
+density function to the payoff in Fourier space, option values can be usually
+computed much easier for these sophisticated processeThe structure of the paper is organized as described in the following. In the next
+section, we briefly outline the general valuation framework for European option
+pricing.
+Unfortunately, more sophisticated price dynamics like affine jump diffusions and
+Lévy processes often do not possess density functions in closed form or have quite
+complicated analytical expressions involving special functions and infinite
+summations. However, for many of the more advanced asset price models
+characteristic functions are available in closed form
+
+så men masse teori om fourier vi kender
+The Black–Scholes Style Formula meget vigtigt
+afsnit 4 vigtigt
+Carr and Madan Approach bliver nævnt og igen motivere den med det her u = 0 problem
+Lewis’ Approach
+5.4 vigtigt 
+
+
+
+
+Carr, P., Geman, H., Madan, D. B., & Yor, M. (2002). 

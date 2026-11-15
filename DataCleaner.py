@@ -24,10 +24,16 @@ class DataCleaner:
         self.df["time_to_maturity"] = (
             self.df["exdate"] - self.df["date"]
         ).dt.days / 365 # er i tvivl her
-
         print(f"Intial length of self.df is: {self.df.shape[0]}")
-        print(self.df.head())
-        print(self.df.columns.tolist())
+
+        # Loader calibrated parames for yield og discount rate
+        self.yield_and_discount_factor = pd.read_csv("calibrated_parameters.csv")
+        print(self.yield_and_discount_factor)
+
+        self.yield_and_discount_factor["maturity"] = pd.to_datetime(
+            self.yield_and_discount_factor["maturity"]
+        )
+        print(self.yield_and_discount_factor)
 
     def remove_0_bid_prices(self):
         self.df = self.df[self.df["best_bid"] != 0]
@@ -40,236 +46,346 @@ class DataCleaner:
         self.df = self.df[~((self.df["cp_flag"] == "P") & (self.df["strike"] > self.spy_close))]
         print(f"Length of self.df after removing itm options: {self.df.shape[0]}")
 
+    def keep_matched_call_put_pairs(self):
+
+        keys = ["date", "exdate", "style", "strike"]
+
+        prices = (
+            self.df.groupby(keys + ["cp_flag"])["mid"]
+            .mean()
+            .unstack("cp_flag")
+        )
+
+        prices = prices.dropna(subset=["C", "P"])
+
+        prices = prices.rename(columns={
+            "C": "call_market",
+            "P": "put_market"
+        })
+
+        return prices
+
+    def convert_puts_to_calls(self, paired):
+
+        rates = self.yield_and_discount_factor
+
+        parameters = (
+            self.df.groupby(["date", "exdate", "style", "strike"])
+            .agg(
+                time_to_maturity=("time_to_maturity", "first")
+            )
+        )
+
+        paired = paired.join(parameters)
+
+        paired = paired.reset_index().merge(
+            rates,
+            left_on="exdate",
+            right_on="maturity",
+            how="inner",
+            validate="many_to_one"
+        )
+
+        K = paired["strike"]
+        T = paired["time_to_maturity"]
+        r = paired["calibrated_r"]
+        q = paired["calibrated_q"]
+
+        paired["synthetic_call"] = (
+            paired["put_market"]
+            + self.spy_close * np.exp(-q * T)
+            - K * np.exp(-r * T)
+        )
+
+        return paired
+
+    def average_call_prices(self, paired):
+
+        paired["call_price"] = (
+            paired["call_market"]
+            + paired["synthetic_call"]
+        ) / 2
+
+        return paired
+
+
+
     def find_vertical_spread_arbitrage(
-        self,
-        price_col="mid",
-        cp_flag="C",
-        tolerance=1e-8
+        self, paired, tolerance=1e-8
     ):
-        """
-        Calls:
-            Q = (C(K1) - C(K2)) / (K2 - K1)
-
-        Puts:
-            Q = (P(K2) - P(K1)) / (K2 - K1)
-
-        No-arbitrage condition:
-            0 <= Q <= 1
-        """
 
         flagged = set()
 
-        group_cols = ["date", "exdate", "style"]
+        for _, group in paired.groupby(
+            ["date", "exdate", "style"]
+        ):
 
-        df = self.df[self.df["cp_flag"] == cp_flag]
-
-        for _, group in df.groupby(group_cols, dropna=False):
-
-            group = group.sort_values("strike").dropna(
-                subset=["strike", price_col]
-            )
-
-            strikes = group["strike"].to_numpy()
-            prices = group[price_col].to_numpy()
-            indices = group.index.to_numpy()
+            group = group.sort_values("strike")
 
             for i in range(len(group) - 1):
 
-                k1, k2 = strikes[i:i+2]
-                p1, p2 = prices[i:i+2]
+                row1 = group.iloc[i]
+                row2 = group.iloc[i + 1]
+
+                k1, k2 = row1["strike"], row2["strike"]
+                p1, p2 = row1["call_price"], row2["call_price"]
 
                 if k2 <= k1:
                     continue
 
-                if cp_flag == "C":
-                    Q = (p1 - p2) / (k2 - k1)
+                Q = (p1 - p2) / (k2 - k1)
 
-                elif cp_flag == "P":
-                    Q = (p2 - p1) / (k2 - k1)
+                upper_bound = np.exp(
+                    -row1["calibrated_r"]
+                    * row1["time_to_maturity"]
+                )
 
-                else:
-                    raise ValueError("cp_flag must be C or P")
+                if Q < -tolerance or Q > upper_bound + tolerance:
 
-                if Q < -tolerance or Q > 1 + tolerance:
-                    flagged.update(indices[i:i+2])
+                    flagged.add(tuple(row1[[
+                        "date", "exdate", "style", "strike"
+                    ]]))
+
+                    flagged.add(tuple(row2[[
+                        "date", "exdate", "style", "strike"
+                    ]]))
 
         return flagged
 
-    def find_butterfly_spread_arbitrage(
-        self,
-        price_col="mid",
-        cp_flag="C",
-        tolerance=1e-8
-    ):
-        """
-        Butterfly condition for both calls and puts:
-
-        P1 - [(K3-K1)/(K3-K2)]*P2
-           + [(K2-K1)/(K3-K2)]*P3 >= 0
-        """
+    def find_butterfly_spread_arbitrage(self, paired, tolerance=1e-8):
 
         flagged = set()
 
-        group_cols = ["date", "exdate", "style"]
+        for _, group in paired.groupby(
+            ["date", "exdate", "style"]
+        ):
 
-        df = self.df[self.df["cp_flag"] == cp_flag]
-
-        for _, group in df.groupby(group_cols, dropna=False):
-
-            group = group.sort_values("strike").dropna(
-                subset=["strike", price_col]
-            )
-
-            strikes = group["strike"].to_numpy()
-            prices = group[price_col].to_numpy()
-            indices = group.index.to_numpy()
+            group = group.sort_values("strike")
 
             for i in range(len(group) - 2):
 
-                k1, k2, k3 = strikes[i:i+3]
-                p1, p2, p3 = prices[i:i+3]
+                rows = group.iloc[i:i+3]
+
+                k1, k2, k3 = rows["strike"].to_numpy()
+                p1, p2, p3 = rows["call_price"].to_numpy()
 
                 if not (k1 < k2 < k3):
                     continue
 
                 butterfly_price = (
                     p1
-                    - ((k3-k1)/(k3-k2))*p2
-                    + ((k2-k1)/(k3-k2))*p3
+                    - ((k3-k1)/(k3-k2)) * p2
+                    + ((k2-k1)/(k3-k2)) * p3
                 )
 
                 if butterfly_price < -tolerance:
-                    flagged.update(indices[i:i+3])
+
+                    for _, row in rows.iterrows():
+
+                        flagged.add(tuple(row[[
+                            "date", "exdate", "style", "strike"
+                        ]]))
 
         return flagged
 
     def find_calendar_spread_arbitrage(
-        self,
-        price_col="mid",
-        cp_flag="C",
-        tolerance=1e-8
+        self, paired, tolerance=1e-8
     ):
-        """
-        Calendar condition for both calls and puts:
-
-            Price(K,T2) - Price(K,T1) >= 0
-
-        where T2 > T1.
-
-        Assumes zero interest rates and dividends.
-        """
 
         flagged = set()
 
-        group_cols = ["date", "strike", "style"]
+        for _, group in paired.groupby(
+            ["date", "strike", "style"]
+        ):
 
-        df = self.df[self.df["cp_flag"] == cp_flag]
-
-        for _, group in df.groupby(group_cols, dropna=False):
-
-            group = group.sort_values("exdate").dropna(
-                subset=["exdate", price_col]
-            )
-
-            prices = group[price_col].to_numpy()
-            indices = group.index.to_numpy()
+            group = group.sort_values("exdate")
 
             for i in range(len(group) - 1):
 
-                price_difference = prices[i+1] - prices[i]
+                row1 = group.iloc[i]
+                row2 = group.iloc[i + 1]
+
+                price_difference = (
+                    row2["call_price"] - row1["call_price"]
+                )
 
                 if price_difference < -tolerance:
-                    flagged.update(indices[i:i+2])
+
+                    flagged.add(tuple(row1[[
+                        "date", "exdate", "style", "strike"
+                    ]]))
+
+                    flagged.add(tuple(row2[[
+                        "date", "exdate", "style", "strike"
+                    ]]))
 
         return flagged
 
-    def remove_static_arbitrage(
-        self,
-        price_col="mid",
-        tolerance=0
-    ):
-        """
-        Remove vertical, butterfly and calendar spread
-        arbitrage from calls and puts.
+    def remove_static_arbitrage(self, paired, tolerance=1e-8):
 
-        Returns:
-            cleaned_df, report
-        """
-
-        self.df = self.df.copy().reset_index(drop=True)
-
-        all_flags = set()
-        report = {}
-
-        # Process calls and puts independently
-        for option_type in ["C", "P"]:
-
-            vertical_flags = self.find_vertical_spread_arbitrage(
-                price_col=price_col,
-                cp_flag=option_type,
-                tolerance=tolerance
-            )
-
-            butterfly_flags = self.find_butterfly_spread_arbitrage(
-                price_col=price_col,
-                cp_flag=option_type,
-                tolerance=tolerance
-            )
-
-            calendar_flags = self.find_calendar_spread_arbitrage(
-                price_col=price_col,
-                cp_flag=option_type,
-                tolerance=tolerance
-            )
-
-            option_flags = (
-                vertical_flags
-                | butterfly_flags
-                | calendar_flags
-            )
-
-            all_flags.update(option_flags)
-
-            report[option_type] = {
-                "vertical_spread": len(vertical_flags),
-                "butterfly_spread": len(butterfly_flags),
-                "calendar_spread": len(calendar_flags),
-                "total_unique_removed": len(option_flags)
-            }
-
-        cleaned_df = self.df.loc[
-            ~self.df.index.isin(all_flags)
-        ].copy()
-
-        report["total_unique_observations_removed"] = len(all_flags)
-
-        return cleaned_df, report
-
-    def remove_arbitrage_prices(self):
-
-        cleaned_df, report = self.remove_static_arbitrage()
-
-        print("\nStatic Arbitrage Removal Report")
-        print("--------------------------------")
-
-        for option_type in ["C", "P"]:
-            print(f"\n{option_type} options:")
-            for test, count in report[option_type].items():
-                print(f"{test}: {count}")
-
-        print(
-            "\nTotal unique observations removed:",
-            report["total_unique_observations_removed"]
+        vertical = self.find_vertical_spread_arbitrage(
+            paired, tolerance
         )
 
-        return cleaned_df
+        butterfly = self.find_butterfly_spread_arbitrage(
+            paired, tolerance
+        )
+
+        calendar = self.find_calendar_spread_arbitrage(
+            paired, tolerance
+        )
+
+        flagged = vertical | butterfly | calendar
+
+        # Remove violations from the temporary surface only
+        paired = paired[
+            ~paired.set_index(
+                ["date", "exdate", "style", "strike"]
+            ).index.isin(flagged)
+        ].copy()
+
+        print("\nStatic arbitrage results:")
+        print(f"Vertical violations: {len(vertical)}")
+        print(f"Butterfly violations: {len(butterfly)}")
+        print(f"Calendar violations: {len(calendar)}")
+        print(f"Total unique violations: {len(flagged)}")
+
+        return paired
+
+    def check_minimum_quotes(self, paired):
+
+        surface_keys = ["date", "exdate", "style"]
+
+        valid_surfaces = (
+            paired.groupby(surface_keys)
+            .size()
+        )
+
+        valid_surfaces = valid_surfaces[
+            valid_surfaces > 10
+        ].index
+
+        paired = paired.set_index(surface_keys)
+
+        paired = paired.loc[
+            paired.index.isin(valid_surfaces)
+        ].reset_index()
+
+        print(
+            f"Surfaces with more than 10 quotes: "
+            f"{len(valid_surfaces)}"
+        )
+
+        return paired
+
+    def find_lower_bound_arbitrage(self, paired, tolerance=1e-8):
+            """
+            Equation (29):
+            C_t(S_t; T, K_j) > max(0, S_t * exp(-q*T) - K_j * exp(-r*T))
+            """
+            flagged = set()
+
+            S = self.spy_close
+            K = paired["strike"]
+            T = paired["time_to_maturity"]
+            r = paired["calibrated_r"]
+            q = paired["calibrated_q"]
+            C = paired["call_price"]
+
+            intrinsic_bound = S * np.exp(-q * T) - K * np.exp(-r * T)
+            lower_bound = np.maximum(0.0, intrinsic_bound)
+
+            # Violation if C <= lower_bound (within numerical tolerance)
+            violations = paired[C <= lower_bound + tolerance]
+
+            for _, row in violations.iterrows():
+                flagged.add(tuple(row[["date", "exdate", "style", "strike"]]))
+
+            return flagged
+
+    def remove_thomas_artical_arb(self, paired, tolerance=1e-8):
+        """
+        Enforces Equations (29), (30), and (31) from Thomas Kockum:
+        - (29) Call lower bound
+        - (30) Vertical spread monotonicity
+        - (31) Butterfly spread convexity
+        """
+        # Equation (29): Lower bound
+        eq29_violations = self.find_lower_bound_arbitrage(paired, tolerance)
+
+        # Equation (30): Vertical spread condition
+        eq30_violations = self.find_vertical_spread_arbitrage(paired, tolerance)
+
+        # Equation (31): Butterfly / convexity condition
+        eq31_violations = self.find_butterfly_spread_arbitrage(paired, tolerance)
+
+        flagged = eq29_violations | eq30_violations | eq31_violations
+
+        paired = paired[
+            ~paired.set_index(["date", "exdate", "style", "strike"]).index.isin(flagged)
+        ].copy()
+
+        print("\nThomas article no-arbitrage results (Eq. 29-31):")
+        print(f"Eq (29) Lower bound violations: {len(eq29_violations)}")
+        print(f"Eq (30) Vertical violations: {len(eq30_violations)}")
+        print(f"Eq (31) Convexity violations: {len(eq31_violations)}")
+        print(f"Total unique violations removed: {len(flagged)}")
+
+        return paired
+
+    def remove_arbitrage_prices(self):
+        # 5 step plan: Thomas Kockum, section 3
+
+        # Step 1:
+        # Only use strikes where both put and call prices are quoted.
+        paired = self.keep_matched_call_put_pairs()
+
+        # Step 2:
+        # Convert put prices into synthetic call prices.
+        paired = self.convert_puts_to_calls(paired)
+
+        # Step 3:
+        # Compute the average of the two available call prices.
+        paired = self.average_call_prices(paired)
+
+        # Step 4:
+        # Remove static arbitrage using vertical, butterfly
+        # and calendar spread conditions.
+        paired = self.remove_static_arbitrage(paired)
+        paired = self.remove_thomas_artical_arb(paired)
+        
+        # Step 5:
+        # Only calibrate surfaces with more than 10 quotes.
+        paired = self.check_minimum_quotes(paired)
+
+        # Create a mask for the ORIGINAL DataFrame.
+        # No original prices are modified.
+
+        keys = ["date", "exdate", "style", "strike"]
+
+        valid_keys = pd.MultiIndex.from_frame(
+            paired[keys]
+        )
+
+        original_keys = pd.MultiIndex.from_frame(
+            self.df[keys]
+        )
+
+        mask = original_keys.isin(valid_keys)
+
+        self.df = self.df.loc[mask].copy()
+
+        print("\nOriginal option data filtered.")
+        print(f"Remaining original observations: {len(self.df)}")
+
 
     def clean_data_for_calibration(self):
         self.remove_0_bid_prices()
-        self.remove_itm_prices()
         self.remove_arbitrage_prices()
-        
+        self.remove_itm_prices()
+
         return self.df, self.spy_close
+
 
     def clean_data_for_put_call_parity(self, n: int = 5):
         self.df_sorted = self.df.assign(
@@ -295,6 +411,5 @@ class DataCleaner:
 if __name__ == "__main__":
     cleaner = DataCleaner()
     test, spy_close_test = cleaner.clean_data_for_calibration()
-
 
 

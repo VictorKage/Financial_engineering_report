@@ -151,6 +151,9 @@ class DataCleaner(InitialCleaner):
     
     def puts_to_calls(self, data: pd.DataFrame) -> pd.DataFrame:
         data = data.copy()
+        data["original_bid"] = data["best_bid"]
+        data["original_offer"] = data["best_offer"]
+        data["original_mid"] = data["mid"]
         S = self.params['close_price']
         T = data["time_to_maturity"]
         data["r"] = data["exdate"].map(self.r)
@@ -176,10 +179,11 @@ class DataCleaner(InitialCleaner):
         return data
 
     @staticmethod
-    def count_violations(maturity_data: pd.DataFrame, tol: float = 1e-10):
-        C = maturity_data["C"].to_numpy()
-        K = maturity_data["strike"].to_numpy()
-        disc = np.exp(-maturity_data["r"].iloc[0] * maturity_data["time_to_maturity"].iloc[0])
+    def count_violations(maturity_data: pd.DataFrame, S: float, q: float, tol: float = 1e-8):
+        T = maturity_data["time_to_maturity"].iloc[0]
+        disc = np.exp(-maturity_data["r"].iloc[0] * T)
+        C = np.concatenate(([S * np.exp(-q * T)], maturity_data["C"].to_numpy(float)))
+        K = np.concatenate(([0.0], maturity_data["strike"].to_numpy(float)))
         counts = np.zeros(len(C), dtype=int)
 
         slope = (C[:-1] - C[1:]) / (K[1:] - K[:-1])
@@ -191,23 +195,24 @@ class DataCleaner(InitialCleaner):
         counts[:-2] += conv
         counts[1:-1] += conv
         counts[2:] += conv
-        return counts, int(mono.sum()), int(conv.sum())
+        return counts[1:], int(mono.sum()), int(conv.sum())
     
     def arbitrage_removal(self, data: pd.DataFrame) -> pd.DataFrame:
         rows = data.shape[0]
+        S = self.params['close_price']
         n_mono, n_conv = 0, 0
         cleaned = []
         for maturity, maturity_data in data.groupby("exdate"):
             maturity_data = maturity_data.sort_values("strike")
-            while len(maturity_data) >= 3:
-                counts, mono, conv = self.count_violations(maturity_data)
-                n_mono += mono
-                n_conv += conv
+            while len(maturity_data) >= 1:
+                counts, mono, conv = self.count_violations(maturity_data, S, self.q)
                 if counts.max() == 0:
                     break
-                candidates = maturity_data[counts == counts.max()]
-                candidates = candidates[candidates["spread"] == candidates["spread"].max()]
-                maturity_data = maturity_data.drop(candidates.index[0])
+                n_mono += mono
+                n_conv += conv
+                candidates = maturity_data[counts == counts.max()]                    # most violations
+                candidates = candidates[candidates["spread"] == candidates["spread"].max()]  # widest spread
+                maturity_data = maturity_data.drop(candidates.index[0])                  # first = lowest strike
             cleaned.append(maturity_data)
         data = pd.concat(cleaned)
         print(f"Removed by slope/convexity: {rows - data.shape[0]}")
@@ -238,5 +243,5 @@ class DataCleaner(InitialCleaner):
         return data
 
 if __name__ == "__main__":
-    Calibrate().calibrate()
+    # Calibrate().calibrate()
     DataCleaner().clean_data()

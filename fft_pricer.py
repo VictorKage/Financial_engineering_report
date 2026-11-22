@@ -15,12 +15,19 @@ class FFTPricer:
         self.N_max = N_max
         self.tol = tol
 
-    def levy_exp_vg(self, u, sigma, nu, theta): #Samme som kappa(iu)
+    @staticmethod
+    def levy_exp_vg(u, sigma, nu, theta): #Samme som kappa(iu)
         return -(1/nu) * np.log(1 - 1j*theta*nu*u + (sigma**2*nu*u**2)/2)
+
+    @staticmethod
+    def levy_exp_cgmy(u, C, G, M, Y):
+        return C * gamma(-Y) * ((M - 1j * u)**Y - M**Y + (G + 1j * u)**Y - G**Y)
 
     def levy_exponent_chooser(self, model, params):
         if model == "VG":
             return lambda u: self.levy_exp_vg(u, *params)
+        elif model == "CGMY":
+            return lambda u: self.levy_exp_cgmy(u, *params)
         elif model == "BS":
             (sigma,) = params
             return lambda u: -0.5 * sigma**2 * u**2
@@ -48,6 +55,9 @@ class FFTPricer:
         if model == "VG":
             sigma, nu, theta = params
             return np.sqrt(theta**2 / sigma**4 + 2 / (sigma**2 * nu)) - theta / sigma**2 - 1
+        elif model == "CGMY":
+            C, G, M, Y = params
+            return M - 1
         return np.inf
 
     # den største mand Peter Carr siger de bruger 0.25 * bound
